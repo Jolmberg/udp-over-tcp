@@ -84,7 +84,7 @@
 pub mod tcp2udp;
 pub mod udp2tcp;
 
-pub use udp2tcp::Udp2Tcp;
+pub use udp2tcp::{Udp2Tcp, Error};
 
 mod exponential_backoff;
 mod forward_traffic;
@@ -92,6 +92,10 @@ mod logging;
 mod tcp_options;
 
 pub use tcp_options::{ApplyTcpOptionsError, ApplyTcpOptionsErrorKind, TcpOptions};
+
+use rustler::{Env, Term, NifMap, NifTuple, NifUnitEnum, NifTaggedEnum, NifUntaggedEnum, ResourceArc};
+use tokio_util::sync::CancellationToken;
+use std::sync::Mutex;
 
 /// Helper trait for `Result<Infallible, E>` types. Allows getting the `E` value
 /// in a way that is guaranteed to not panic.
@@ -103,4 +107,157 @@ impl<E> NeverOkResult<E> for Result<std::convert::Infallible, E> {
     fn into_error(self) -> E {
         self.expect_err("Result<Infallible, _> can't be Ok variant")
     }
+}
+
+#[derive(NifMap)]
+struct MyMap {
+    lhs: i32,
+    rhs: i32,
+}
+
+#[derive(NifTuple)]
+struct MyTuple {
+    lhs: i32,
+    rhs: i32,
+}
+
+#[derive(NifUnitEnum)]
+enum UnitEnum {
+    FooBar,
+    Baz,
+}
+
+#[derive(NifTaggedEnum)]
+enum TaggedEnum {
+    Foo,
+    Bar(String),
+    Baz{ a: i32, b: i32 },
+}
+
+#[derive(NifUntaggedEnum)]
+enum UntaggedEnum {
+    Foo(u32),
+    Bar(String),
+}
+
+#[rustler::nif(name = "add")]
+fn add_nif(a: i64, b: i64) -> i64 {
+    add(a, b)
+}
+
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+#[rustler::nif(name = "my_map")]
+fn my_map_nif() -> MyMap {
+    my_map()
+}
+
+#[rustler::nif]
+fn my_maps() -> Vec<MyMap> {
+    vec![ my_map(), my_map()]
+}
+
+fn my_map() -> MyMap {
+    MyMap { lhs: 33, rhs: 21 }
+}
+
+#[rustler::nif]
+fn my_tuple() -> MyTuple {
+    MyTuple { lhs: 33, rhs: 21 }
+}
+
+#[rustler::nif]
+fn unit_enum_echo(unit_enum: UnitEnum) -> UnitEnum {
+    unit_enum
+}
+
+#[rustler::nif]
+fn tagged_enum_echo(tagged_enum: TaggedEnum) -> TaggedEnum {
+    tagged_enum
+}
+
+#[rustler::nif]
+fn untagged_enum_echo(untagged_enum: UntaggedEnum) -> UntaggedEnum {
+    untagged_enum
+}
+
+fn load(env: Env, _: Term) -> bool {
+    rustler::resource!(TokenResource, env);
+    true
+}
+
+rustler::init!("udp_over_tcp",
+               [ add_nif
+                 , my_map_nif
+                 , my_maps
+                 , my_tuple
+                 , unit_enum_echo
+                 , tagged_enum_echo
+                 , untagged_enum_echo
+                 , udp2tcp_nif
+                 , stop_nif
+               ],
+               load = load
+);
+
+#[cfg(test)]
+mod tests {
+    use crate::add;
+
+    #[test]
+    fn it_works() {
+        let result = add(2, 2);
+        assert_eq!(result, 4);
+    }
+}
+
+//#[tokio::main]
+async fn tunnel(_target: i32, token: CancellationToken) {
+//Result<(), udp2tcp::Error> {
+    //let udp2tcp = udp_over_tcp::Udp2Tcp::new(
+    println!("Spawnar");
+    let cloned_token = token.clone();
+
+    tokio::spawn(async move {
+        _ = tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        println!("Sovit klart!");
+        token.cancel();
+    });
+    println!("awaitar");
+    let udp_listen_addr = "127.0.0.1:9999".parse().unwrap();
+    let tcp_forward_addr = "127.0.0.1:10000".parse().unwrap();
+    let udp2tcp = Udp2Tcp::new(
+        udp_listen_addr,
+        tcp_forward_addr,
+        TcpOptions::default(),
+        cloned_token
+    ).await.unwrap();
+    println!("Nu auker vi!");
+    udp2tcp.run().await;
+}
+
+struct TokenResource {
+    pub token: CancellationToken
+}
+
+#[rustler::nif(name = "udp2tcp", schedule = "DirtyIo")]
+fn udp2tcp_nif(target: i32) -> Result<ResourceArc<TokenResource>, rustler::Error> {
+    //let handle = tokio::runtime::Handle::current();
+    //handle.enter();
+    let token = CancellationToken::new();
+    let cloned_token = token.clone();
+    let _thread = std::thread::spawn(move || {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(tunnel(target, token));
+    });
+    //handle.block_on(tunnel(target));
+    let arc = ResourceArc::new(TokenResource { token: cloned_token });
+    Ok(arc)
+}
+
+#[rustler::nif(name = "stop")]
+fn stop_nif(at: ResourceArc<TokenResource>) {
+    at.token.cancel();
 }

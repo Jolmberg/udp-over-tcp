@@ -13,6 +13,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf as TcpReadHalf, OwnedWriteHalf as TcpWriteHalf};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::timeout;
+//use tokio::select;
+use tokio_util::sync::CancellationToken;
+
 
 /// A UDP datagram header has a 16 bit field containing an unsigned integer
 /// describing the length of the datagram (including the header itself).
@@ -30,6 +33,7 @@ pub async fn process_udp_over_tcp(
     udp_socket: UdpSocket,
     tcp_stream: TcpStream,
     tcp_recv_timeout: Option<Duration>,
+    token: CancellationToken
 ) {
     let udp_in = Arc::new(udp_socket);
     let udp_out = udp_in.clone();
@@ -45,11 +49,16 @@ pub async fn process_udp_over_tcp(
         log::error!("Error: {}", error.display("\nCaused by: "));
     };
 
+    let c = token.cancelled();
+
     pin_mut!(tcp2udp);
     pin_mut!(udp2tcp);
-
+    pin_mut!(c);
     // Wait until the UDP->TCP or TCP->UDP future terminates.
-    select(tcp2udp, udp2tcp).await;
+    println!("Himmel, hennes juveler!");
+    select(select(tcp2udp, udp2tcp), c).await;
+    //select!{tcp2udp => {1}, udp2tcp, token.cancelled() => {5}};
+    //select(tcp2udp, udp2tcp, token.cancelled()).await;
 }
 
 /// Reads from `tcp_in` and extracts UDP datagrams. Writes the datagrams to `udp_out`.

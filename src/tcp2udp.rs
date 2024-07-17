@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 #[path = "statsd.rs"]
 mod statsd;
@@ -291,8 +292,8 @@ async fn process_socket(
             .unwrap_or(&"unknown"),
         udp_peer_addr
     );
-
-    crate::forward_traffic::process_udp_over_tcp(udp_socket, tcp_stream, tcp_recv_timeout).await;
+    let token = CancellationToken::new();
+    crate::forward_traffic::process_udp_over_tcp(udp_socket, tcp_stream, tcp_recv_timeout, token).await;
     log::debug!(
         "Closing forwarding for {}/TCP <-> {}/UDP",
         Redact(tcp_peer_addr),

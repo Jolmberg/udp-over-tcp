@@ -6,6 +6,7 @@ use std::fmt;
 use std::io;
 use std::net::SocketAddr;
 use tokio::net::{TcpSocket, UdpSocket};
+use tokio_util::sync::CancellationToken;
 
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -61,6 +62,7 @@ pub struct Udp2Tcp {
     udp_socket: UdpSocket,
     tcp_forward_addr: SocketAddr,
     tcp_options: crate::TcpOptions,
+    token: CancellationToken,
 }
 
 impl Udp2Tcp {
@@ -70,6 +72,7 @@ impl Udp2Tcp {
         udp_listen_addr: SocketAddr,
         tcp_forward_addr: SocketAddr,
         tcp_options: crate::TcpOptions,
+        token: CancellationToken,
     ) -> Result<Self, Error> {
         let tcp_socket = match &tcp_forward_addr {
             SocketAddr::V4(..) => TcpSocket::new_v4(),
@@ -92,6 +95,7 @@ impl Udp2Tcp {
             udp_socket,
             tcp_forward_addr,
             tcp_options,
+            token
         })
     }
 
@@ -114,12 +118,14 @@ impl Udp2Tcp {
     pub async fn run(self) -> Result<(), Error> {
         // Wait for the first datagram, to get the UDP peer_addr to connect to.
         let mut tmp_buffer = crate::forward_traffic::datagram_buffer();
+        println!("Men wrtf");
         let (_udp_read_len, udp_peer_addr) = self
             .udp_socket
             .peek_from(tmp_buffer.as_mut())
             .await
             .map_err(Error::ReadUdp)?;
         log::info!("Incoming connection from {}/UDP", Redact(udp_peer_addr));
+        println!("Men wrtf 2");
 
         log::info!("Connecting to {}/TCP", self.tcp_forward_addr);
         let tcp_stream = self
@@ -128,9 +134,11 @@ impl Udp2Tcp {
             .await
             .map_err(Error::ConnectTcp)?;
         log::info!("Connected to {}/TCP", self.tcp_forward_addr);
+        println!("Men wrtf 3");
 
         crate::tcp_options::set_nodelay(&tcp_stream, self.tcp_options.nodelay)
             .map_err(Error::ApplyTcpOptions)?;
+        println!("Men wrtf 4");
 
         // Connect the UDP socket to whoever sent the first datagram. This is where
         // all the returned traffic will be sent to.
@@ -139,12 +147,15 @@ impl Udp2Tcp {
             .await
             .map_err(Error::ConnectUdp)?;
 
+        println!("Nu process");
         crate::forward_traffic::process_udp_over_tcp(
             self.udp_socket,
             tcp_stream,
             self.tcp_options.recv_timeout,
+            self.token
         )
-        .await;
+            .await;
+        println!("Tjocka isterbuk!");
         log::debug!(
             "Closing forwarding for {}/UDP <-> {}/TCP",
             Redact(udp_peer_addr),
